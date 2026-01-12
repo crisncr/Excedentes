@@ -42,26 +42,29 @@ export default function Dashboard() {
     const { cart, addToCart, removeFromCart, clearCart } = useCart()
     const { showNotification } = useNotification()
 
+    const [searchTermInput, setSearchTermInput] = useState('')
+
+    // Debounce search
     useEffect(() => {
-        if (products.length > 0) {
-            reconcilePendingStock()
-        }
-    }, [products])
+        const timer = setTimeout(() => {
+            setSearchTerm(searchTermInput)
+        }, 500)
+        return () => clearTimeout(timer)
+    }, [searchTermInput])
+
+    useEffect(() => {
+        setPage(1)
+    }, [searchTerm])
 
     useEffect(() => {
         fetchProductsAndReconcile()
-    }, [page])
+    }, [page, searchTerm])
 
     useEffect(() => {
         if (view === 'boletas') {
             fetchBoletas()
         }
     }, [view])
-
-    const handleSearch = () => {
-        setPage(1)
-        fetchProductsAndReconcile()
-    }
 
     const fetchProductsAndReconcile = async () => {
         try {
@@ -70,7 +73,7 @@ export default function Dashboard() {
 
             if (!session) return
 
-            let url = `http://127.0.0.1:8000/excedentes/existencias?page=${page}&page_size=${PAGE_SIZE}`
+            let url = `http://192.168.1.130:8000/excedentes/existencias?page=${page}&page_size=${PAGE_SIZE}`
             if (searchTerm) {
                 url += `&search=${encodeURIComponent(searchTerm)}`
             }
@@ -138,8 +141,6 @@ export default function Dashboard() {
         }
     }
 
-    const reconcilePendingStock = () => { }
-
     const fetchBoletas = async () => {
         try {
             const { data, error } = await supabase
@@ -157,12 +158,10 @@ export default function Dashboard() {
     }
 
     const openQuantityModal = (product: Product) => {
-        // Check if item is already in cart
         const alreadyInCart = cart.some(item => item.litm === product.litm)
 
         if (alreadyInCart) {
             showNotification('warning', 'Producto ya en el carro', 'Este producto ya fue agregado. Elimínalo del carro si deseas modificar la cantidad.')
-            // Optional: Redirect to cart to show them
             return
         }
 
@@ -184,16 +183,11 @@ export default function Dashboard() {
         const pending = selectedProduct.pending_stock || 0
         const currentStock = selectedProduct.pqoh
 
-
-
         if (!targetQty || targetQty <= 0) {
             showNotification('info', 'Cantidad requerida', 'Por favor ingresa un valor válido mayor a 0.')
             return
         }
 
-
-
-        // BLOQUEO ESTRICTO
         if (pending > 0) {
             showNotification('error', 'Compra Pendiente', `Tienes una compra de ${pending} unidades pendiente. Espera a que llegue el stock.`)
             closeQuantityModal()
@@ -207,7 +201,6 @@ export default function Dashboard() {
         }
 
         const buyQty = targetQty - currentStock
-
         const isFirstItem = cart.length === 0
 
         addToCart({
@@ -241,19 +234,16 @@ export default function Dashboard() {
                 return
             }
 
-            // ITERAMOS SOBRE CADA ITEM PARA GENERAR UNA BOLETA INDIVIDUAL
             for (const item of cart) {
-                // Generamos un ID único para cada boleta (añadimos random para que no colisionen muy rápido en el mismo milisegundo)
                 const boletaNumber = `${Date.now()}-${Math.floor(Math.random() * 1000)}`
 
-                // 1. Insertar Cabecera (Purchases) - 1 Boleta por Item
                 const { data: purchaseData, error: purchaseError } = await supabase
                     .from('purchases')
                     .insert([{
                         boleta_number: boletaNumber,
                         requested_by_email: user.email,
                         requested_by_name: user.email,
-                        total_items: 1, // Siempre 1 item por boleta en este nuevo modelo
+                        total_items: 1,
                         total_value: 0
                     }])
                     .select()
@@ -263,7 +253,6 @@ export default function Dashboard() {
 
                 const purchaseId = purchaseData.purchase_id
 
-                // 2. Insertar Item (Purchase Items)
                 const itemToInsert = {
                     purchase_id: purchaseId,
                     item_code: item.litm,
@@ -283,16 +272,14 @@ export default function Dashboard() {
 
                 if (itemsError) throw itemsError
 
-                // 3. Generar PDF Individual
-                // Pasamos el item en un array porque la función espera array, pero tendrá length 1
                 generatePDF([item], boletaNumber, purchaseData.created_at)
             }
 
             clearCart()
-            showNotification('success', 'Compra realizada', `Se han generado ${cart.length} boletas exitosamente.`)
+            showNotification('success', 'Compra realizada', `Se han generado ${cart.length} requisiciones exitosamente.`)
 
             fetchProductsAndReconcile()
-            setView('boletas') // O 'catalog' según prefiera
+            setView('boletas')
 
         } catch (error: any) {
             console.error('Error al comprar:', error)
@@ -303,15 +290,13 @@ export default function Dashboard() {
     const generatePDF = (items: any[], boletaId: string, dateStr: string) => {
         if (items.length === 0) return
 
-        // Custom Compact Format: 210mm wide x 105mm high (Half an A4 Landscape)
         const doc = new jsPDF({
             orientation: 'landscape',
             unit: 'mm',
             format: [210, 105]
         })
 
-        // -- Header --
-        doc.setFillColor(63, 81, 181) // Indigo Primary
+        doc.setFillColor(63, 81, 181)
         doc.rect(0, 0, 210, 30, 'F')
 
         doc.setTextColor(255, 255, 255)
@@ -324,11 +309,9 @@ export default function Dashboard() {
         doc.text('Sistema de Compras JDE', 14, 18)
         doc.text(`Fecha: ${new Date(dateStr).toLocaleString()}`, 14, 23)
 
-        // -- Info Box --
         doc.setFontSize(9)
         doc.text(`N° Documento: ${boletaId}`, 196, 12, { align: 'right' })
 
-        // -- Table --
         const tableData = items.map(item => [
             { content: item.litm || item.item_code, styles: { fontStyle: 'bold' } },
             item.dsci || '---',
@@ -366,7 +349,6 @@ export default function Dashboard() {
             tableWidth: 'auto'
         })
 
-        // -- Footer --
         const pageHeight = doc.internal.pageSize.height
         doc.setDrawColor(200, 200, 200)
         doc.line(14, pageHeight - 15, 196, pageHeight - 15)
@@ -376,7 +358,7 @@ export default function Dashboard() {
         doc.text('Este documento es un comprobante interno de solicitud.', 105, pageHeight - 10, { align: 'center' })
         doc.text('El stock se actualizará una vez procesado en JDE.', 105, pageHeight - 6, { align: 'center' })
 
-        doc.save(`boleta-${boletaId}.pdf`)
+        doc.save(`requisicion-${boletaId}.pdf`)
     }
 
     const handleDownloadHistoryPDF = async (purchase: BoletaDisplay) => {
@@ -386,24 +368,21 @@ export default function Dashboard() {
             .eq('purchase_id', purchase.purchase_id)
 
         if (error || !items) {
-            showNotification('error', 'Error', 'No se pudieron cargar los items de la boleta')
+            showNotification('error', 'Error', 'No se pudieron cargar los items de la requisición')
             return
         }
 
-        // Fetch descriptions from backend to enrich the PDF
         const enrichedItems = await Promise.all(items.map(async (i) => {
             let description = '---'
             try {
                 const { data: { session } } = await supabase.auth.getSession()
                 if (session) {
-                    // We try to fetch the item details to get the description
-                    const response = await fetch(`http://127.0.0.1:8000/excedentes/existencias?search=${i.item_code}`, {
+                    const response = await fetch(`http://192.168.1.130:8000/excedentes/existencias?search=${i.item_code}`, {
                         headers: { 'Authorization': `Bearer ${session.access_token}` }
                     })
                     if (response.ok) {
                         const data = await response.json()
                         if (data.items && data.items.length > 0) {
-                            // Find exact match
                             const match = data.items.find((p: any) => String(p.litm) === String(i.item_code))
                             if (match) description = match.dsci
                         }
@@ -430,7 +409,6 @@ export default function Dashboard() {
 
     return (
         <div className="min-h-screen bg-gray-50 font-sans text-gray-900">
-            {/* Modal de Cantidad */}
             {isModalOpen && selectedProduct && (
                 <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
                     <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
@@ -498,7 +476,6 @@ export default function Dashboard() {
                 </div>
             )}
 
-            {/* Navbar Moderno */}
             <nav className="bg-white shadow sticky top-0 z-40">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="flex justify-between h-16 items-center">
@@ -507,7 +484,7 @@ export default function Dashboard() {
                                 onClick={() => setView('catalog')}
                                 className="text-2xl font-extrabold text-indigo-600 tracking-tight cursor-pointer hover:opacity-80 transition-opacity"
                             >
-                                JDE Compras
+                                JDE Solicitud de Excedentes
                             </span>
                         </div>
                         <div className="flex items-center space-x-6">
@@ -515,7 +492,7 @@ export default function Dashboard() {
                                 onClick={() => setView('boletas')}
                                 className={`text-sm font-medium transition-colors ${view === 'boletas' ? 'text-indigo-600' : 'text-gray-500 hover:text-gray-900'}`}
                             >
-                                Mis Boletas
+                                Mis Requisiciones
                             </button>
                             <button
                                 onClick={() => setView('catalog')}
@@ -554,20 +531,22 @@ export default function Dashboard() {
                     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                         <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                             <h2 className="text-xl font-bold text-gray-800">Catálogo de Excedentes</h2>
-                            <div className="flex space-x-3">
+                            <div className="relative">
                                 <input
                                     type="text"
-                                    placeholder="Buscar SKU o nombre..."
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                    className="w-64 rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-4 py-2"
+                                    placeholder="Buscar SKU, item o nombre..."
+                                    value={searchTermInput}
+                                    onChange={(e) => setSearchTermInput(e.target.value)}
+                                    className="w-80 rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-4 py-2 pr-10"
                                 />
-                                <button
-                                    onClick={handleSearch}
-                                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-sm hover:bg-indigo-700 font-medium text-sm transition-colors"
-                                >
-                                    Buscar
-                                </button>
+                                {loading && searchTermInput && (
+                                    <div className="absolute right-3 top-2.5">
+                                        <svg className="animate-spin h-4 w-4 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -583,43 +562,56 @@ export default function Dashboard() {
                                         <th scope="col" className="px-6 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Acción</th>
                                     </tr>
                                 </thead>
-                                <tbody className="bg-white divide-y divide-gray-100">
-                                    {loading ? (
-                                        <tr><td colSpan={6} className="px-6 py-4 text-center text-gray-500">Cargando productos...</td></tr>
-                                    ) : products.map((product) => {
-                                        const uniqueId = `${product.litm}-${product.lotn}`
-                                        const isPending = product.pending_stock && product.pending_stock > 0
-                                        return (
-                                            <tr key={uniqueId} className="hover:bg-gray-50 transition-colors">
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{product.litm}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.dsci}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.primary_uom}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-bold">{product.pqoh}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap">
-                                                    {isPending ? (
-                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-                                                            Pendiente (+{product.pending_stock})
-                                                        </span>
-                                                    ) : (
-                                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                                            Disponible
-                                                        </span>
-                                                    )}
-                                                </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                    <button
-                                                        onClick={() => openQuantityModal(product)}
-                                                        disabled={!!isPending}
-                                                        className={`px-4 py-2 rounded-md font-medium text-white transition-all shadow-sm ${isPending
-                                                            ? 'bg-gray-300 cursor-not-allowed'
-                                                            : 'bg-indigo-600 hover:bg-indigo-700 hover:shadow-md'}`}
-                                                    >
-                                                        Agregar
-                                                    </button>
-                                                </td>
+                                <tbody className={`bg-white divide-y divide-gray-100 transition-opacity duration-200 ${loading && products.length > 0 ? 'opacity-50' : 'opacity-100'}`}>
+                                    {loading && products.length === 0 ? (
+                                        [...Array(8)].map((_, i) => (
+                                            <tr key={i} className="animate-pulse">
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="h-4 bg-gray-100 rounded w-16"></div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="h-4 bg-gray-100 rounded w-64"></div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="h-4 bg-gray-100 rounded w-12"></div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="h-4 bg-gray-100 rounded w-8"></div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="h-8 bg-gray-100 rounded-full w-20"></div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-right"><div className="h-9 bg-gray-100 rounded-md w-24 ml-auto"></div></td>
                                             </tr>
-                                        )
-                                    })}
+                                        ))
+                                    ) : products.length === 0 ? (
+                                        <tr><td colSpan={6} className="px-6 py-4 text-center text-gray-500">No se encontraron productos</td></tr>
+                                    ) : (
+                                        products.map((product) => {
+                                            const uniqueId = `${product.litm}-${product.lotn}`
+                                            const isPending = product.pending_stock && product.pending_stock > 0
+                                            return (
+                                                <tr key={uniqueId} className="hover:bg-gray-50 transition-colors">
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{product.litm}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.dsci}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.primary_uom}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-bold">{product.pqoh}</td>
+                                                    <td className="px-6 py-4 whitespace-nowrap">
+                                                        {isPending ? (
+                                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+                                                                Pendiente (+{product.pending_stock})
+                                                            </span>
+                                                        ) : (
+                                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                                                Disponible
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                        <button
+                                                            onClick={() => openQuantityModal(product)}
+                                                            disabled={!!isPending}
+                                                            className={`px-4 py-2 rounded-md font-medium text-white transition-all shadow-sm ${isPending
+                                                                ? 'bg-gray-300 cursor-not-allowed'
+                                                                : 'bg-indigo-600 hover:bg-indigo-700 hover:shadow-md'}`}
+                                                        >
+                                                            Agregar
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            )
+                                        })
+                                    )}
                                 </tbody>
                             </table>
                         </div>
@@ -633,13 +625,13 @@ export default function Dashboard() {
 
                 {view === 'boletas' && (
                     <div className="max-w-5xl mx-auto">
-                        <h2 className="text-2xl font-bold text-gray-800 mb-6">Mis Compras Realizadas</h2>
+                        <h2 className="text-2xl font-bold text-gray-800 mb-6">Mis Requisiciones Realizadas</h2>
                         <div className="grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
                             {boletas.map(b => (
                                 <div key={b.purchase_id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow">
                                     <div className="flex justify-between items-start mb-4">
                                         <div>
-                                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Boleta</p>
+                                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Requisición</p>
                                             <h3 className="text-lg font-bold text-gray-900">#{b.boleta_number}</h3>
                                         </div>
                                         <div className="bg-green-50 rounded-full p-2">
@@ -723,7 +715,6 @@ export default function Dashboard() {
                                     </div>
                                 </section>
 
-                                {/* Sidebar de Resumen */}
                                 <section className="lg:col-span-5 mt-16 lg:mt-0">
                                     <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 sticky top-24">
                                         <h2 className="text-lg font-medium text-gray-900 mb-6">Resumen de solicitud</h2>
