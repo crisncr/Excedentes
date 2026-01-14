@@ -44,4 +44,6 @@ frontend/package-lock.json
 **/*.pyc
 **/node_modules
 **/dist
+# Allow .env.example templates
+!**/.env.example
 **/.env*
